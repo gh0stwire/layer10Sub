@@ -1,0 +1,372 @@
+<!DOCTYPE html>
+<html>
+<head>
+    <title>Enron Memory Graph Visualization</title>
+    <script src="https://d3js.org/d3.v7.min.js"></script>
+    <style>
+        body { 
+            font-family: Arial, sans-serif; 
+            margin: 0; 
+            padding: 20px; 
+            display: flex; 
+            height: 100vh;
+            overflow: hidden;
+        }
+        #sidebar { 
+            width: 350px; 
+            padding: 20px; 
+            background: #f5f5f5; 
+            height: 100vh; 
+            overflow-y: auto; 
+            box-shadow: 2px 0 5px rgba(0,0,0,0.1);
+        }
+        #graph { 
+            flex: 1; 
+            height: 100vh; 
+            background: #fff;
+        }
+        .node { 
+            cursor: pointer; 
+            stroke: #fff;
+            stroke-width: 1.5px;
+        }
+        .node:hover {
+            stroke: #333;
+            stroke-width: 2px;
+        }
+        .link { 
+            stroke: #999; 
+            stroke-opacity: 0.6; 
+            stroke-width: 1px;
+        }
+        .node-label { 
+            font-size: 12px;
+            pointer-events: none;
+            text-shadow: 0 1px 0 #fff, 1px 0 0 #fff, 0 -1px 0 #fff, -1px 0 0 #fff;
+        }
+        .evidence-box { 
+            background: white; 
+            padding: 15px; 
+            margin: 10px 0; 
+            border-radius: 8px; 
+            box-shadow: 0 2px 4px rgba(0,0,0,0.1);
+            border-left: 4px solid #007bff;
+        }
+        .search-box { 
+            width: 100%; 
+            padding: 12px; 
+            margin: 10px 0; 
+            border: 2px solid #ddd;
+            border-radius: 6px;
+            font-size: 14px;
+        }
+        button { 
+            padding: 12px 20px; 
+            background: #007bff; 
+            color: white; 
+            border: none; 
+            border-radius: 6px;
+            cursor: pointer;
+            font-size: 14px;
+            font-weight: bold;
+            width: 100%;
+            margin-bottom: 10px;
+        }
+        button:hover {
+            background: #0056b3;
+        }
+        .result-item {
+            background: white;
+            padding: 10px;
+            margin: 5px 0;
+            border-radius: 4px;
+            cursor: pointer;
+            border-left: 3px solid #007bff;
+        }
+        .result-item:hover {
+            background: #e9ecef;
+        }
+        .stats-box {
+            background: white;
+            padding: 15px;
+            border-radius: 8px;
+            margin-top: 20px;
+        }
+        h3 {
+            color: #333;
+            border-bottom: 2px solid #007bff;
+            padding-bottom: 5px;
+            margin-top: 20px;
+        }
+        .entity-person { background: #ff7f0e; }
+        .entity-team { background: #2ca02c; }
+        .entity-project { background: #d62728; }
+        .entity-topic { background: #9467bd; }
+        .entity-unknown { background: #1f77b4; }
+    </style>
+</head>
+<body>
+    <div id="sidebar">
+        <h2>📧 Enron Memory Graph</h2>
+        <p>Explore extracted entities and relationships from Enron emails</p>
+        
+        <h3>🔍 Search</h3>
+        <input type="text" id="search" class="search-box" placeholder="Ask a question...">
+        <button onclick="search()">Search</button>
+        
+        <div id="search-results"></div>
+        
+        <h3>📋 Evidence Panel</h3>
+        <div id="evidence-panel">
+            <p style="color: #666; font-style: italic;">Click on a node or search result to see evidence</p>
+        </div>
+        
+        <h3>📊 Stats</h3>
+        <div id="stats" class="stats-box">
+            <p>Loading...</p>
+        </div>
+        
+        <h3>🎨 Legend</h3>
+        <div class="stats-box">
+            <p><span style="color: #ff7f0e;">●</span> Person</p>
+            <p><span style="color: #2ca02c;">●</span> Team</p>
+            <p><span style="color: #d62728;">●</span> Project</p>
+            <p><span style="color: #9467bd;">●</span> Topic</p>
+            <p><span style="color: #1f77b4;">●</span> Other</p>
+        </div>
+    </div>
+    
+    <div id="graph"></div>
+
+    <script>
+        let graphData = { nodes: [], links: [] };
+        let simulation;
+        let svg;
+        let g;
+        
+        // Load graph data
+        fetch('/api/graph')
+            .then(response => response.json())
+            .then(data => {
+                graphData = data;
+                updateStats();
+                drawGraph();
+            })
+            .catch(error => {
+                console.error('Error loading graph:', error);
+                document.getElementById('stats').innerHTML = '<p style="color: red;">Error loading graph data. Make sure the pipeline has been run and outputs/graph.json exists.</p>';
+            });
+        
+        function drawGraph() {
+            const width = document.getElementById('graph').clientWidth;
+            const height = document.getElementById('graph').clientHeight;
+            
+            // Clear any existing SVG
+            d3.select("#graph").selectAll("svg").remove();
+            
+            svg = d3.select("#graph")
+                .append("svg")
+                .attr("width", width)
+                .attr("height", height);
+            
+            // Add zoom behavior
+            svg.call(d3.zoom()
+                .scaleExtent([0.1, 4])
+                .on("zoom", (event) => {
+                    g.attr("transform", event.transform);
+                }));
+            
+            g = svg.append("g");
+            
+            // Create simulation
+            simulation = d3.forceSimulation(graphData.nodes)
+                .force("link", d3.forceLink(graphData.links).id(d => d.id).distance(100))
+                .force("charge", d3.forceManyBody().strength(-300))
+                .force("center", d3.forceCenter(width / 2, height / 2))
+                .force("collision", d3.forceCollide().radius(20));
+            
+            // Draw links
+            const link = g.append("g")
+                .selectAll("line")
+                .data(graphData.links)
+                .enter().append("line")
+                .attr("class", "link")
+                .attr("stroke-width", d => Math.max(1, d.confidence * 3));
+            
+            // Draw nodes
+            const node = g.append("g")
+                .selectAll("circle")
+                .data(graphData.nodes)
+                .enter().append("circle")
+                .attr("class", "node")
+                .attr("r", d => Math.max(5, d.confidence * 10))
+                .attr("fill", d => {
+                    switch(d.type) {
+                        case 'person': return '#ff7f0e';
+                        case 'team': return '#2ca02c';
+                        case 'project': return '#d62728';
+                        case 'topic': return '#9467bd';
+                        default: return '#1f77b4';
+                    }
+                })
+                .on("click", (event, d) => showEntityInfo(d.id))
+                .call(d3.drag()
+                    .on("start", dragstarted)
+                    .on("drag", dragged)
+                    .on("end", dragended));
+            
+            // Add labels
+            const label = g.append("g")
+                .selectAll("text")
+                .data(graphData.nodes)
+                .enter().append("text")
+                .attr("class", "node-label")
+                .attr("dx", 12)
+                .attr("dy", 4)
+                .text(d => d.label.length > 20 ? d.label.substring(0, 17) + '...' : d.label);
+            
+            // Update positions on simulation tick
+            simulation.on("tick", () => {
+                link
+                    .attr("x1", d => d.source.x)
+                    .attr("y1", d => d.source.y)
+                    .attr("x2", d => d.target.x)
+                    .attr("y2", d => d.target.y);
+                
+                node
+                    .attr("cx", d => d.x)
+                    .attr("cy", d => d.y);
+                
+                label
+                    .attr("x", d => d.x)
+                    .attr("y", d => d.y);
+            });
+        }
+        
+        function dragstarted(event) {
+            if (!event.active) simulation.alphaTarget(0.3).restart();
+            event.subject.fx = event.subject.x;
+            event.subject.fy = event.subject.y;
+        }
+        
+        function dragged(event) {
+            event.subject.fx = event.x;
+            event.subject.fy = event.y;
+        }
+        
+        function dragended(event) {
+            if (!event.active) simulation.alphaTarget(0);
+            event.subject.fx = null;
+            event.subject.fy = null;
+        }
+        
+        function showEntityInfo(entityId) {
+            fetch(`/api/entity/${entityId}`)
+                .then(response => response.json())
+                .then(data => {
+                    document.getElementById('evidence-panel').innerHTML = `
+                        <div class="evidence-box">
+                            <h4>📌 ${data.names.join(', ')}</h4>
+                            <p><strong>Type:</strong> ${data.type}</p>
+                            <p><strong>Confidence:</strong> ${(data.confidence * 100).toFixed(1)}%</p>
+                            <p><strong>Claims as subject:</strong> ${data.claims_as_subject}</p>
+                            <p><strong>Claims as object:</strong> ${data.claims_as_object}</p>
+                            <p><strong>Evidence count:</strong> ${data.evidence_count}</p>
+                        </div>
+                    `;
+                });
+        }
+        
+        function showClaimInfo(claimId) {
+            fetch(`/api/claim/${claimId}`)
+                .then(response => response.json())
+                .then(data => {
+                    let evidenceHtml = '';
+                    if (data.evidence && data.evidence.length > 0) {
+                        evidenceHtml = data.evidence.map(e => `
+                            <div class="evidence-box">
+                                <p><strong>📝 Excerpt:</strong> "${e.excerpt}"</p>
+                                <p><strong>📁 Source:</strong> ${e.source_id.split('/').pop()}</p>
+                                <p><strong>📅 Date:</strong> ${e.timestamp ? new Date(e.timestamp).toLocaleDateString() : 'Unknown'}</p>
+                                <p><strong>🎯 Confidence:</strong> ${(e.confidence * 100).toFixed(1)}%</p>
+                            </div>
+                        `).join('');
+                    } else {
+                        evidenceHtml = '<p style="color: #666;">No evidence available</p>';
+                    }
+                    
+                    document.getElementById('evidence-panel').innerHTML = `
+                        <h4>🔗 Claim Details</h4>
+                        <div class="evidence-box">
+                            <p><strong>${data.subject} ${data.predicate} ${data.object || data.value || ''}</strong></p>
+                            <p><strong>Type:</strong> ${data.type}</p>
+                            <p><strong>Valid:</strong> ${data.valid_from ? new Date(data.valid_from).toLocaleDateString() : 'Unknown'} to ${data.valid_to ? new Date(data.valid_to).toLocaleDateString() : 'present'}</p>
+                            <p><strong>Confidence:</strong> ${(data.confidence * 100).toFixed(1)}%</p>
+                        </div>
+                        <h4>📚 Supporting Evidence</h4>
+                        ${evidenceHtml}
+                    `;
+                });
+        }
+        
+        function search() {
+            const query = document.getElementById('search').value;
+            if (!query.trim()) return;
+            
+            fetch('/api/search', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ query: query })
+            })
+            .then(response => response.json())
+            .then(data => {
+                let resultsHtml = '<h4>Search Results</h4>';
+                
+                if (data.results && data.results.length > 0) {
+                    data.results.forEach(result => {
+                        resultsHtml += `
+                            <div class="result-item" onclick="${result.type === 'claim' ? `showClaimInfo('${result.id}')` : `showEntityInfo('${result.id}')`}">
+                                <strong>${result.label}</strong><br>
+                                <small>Type: ${result.type} | Confidence: ${(result.confidence * 100).toFixed(1)}%</small>
+                            </div>
+                        `;
+                    });
+                } else {
+                    resultsHtml += '<p style="color: #666;">No results found</p>';
+                }
+                
+                document.getElementById('search-results').innerHTML = resultsHtml;
+            });
+        }
+        
+        function updateStats() {
+            const entityTypes = {};
+            graphData.nodes.forEach(node => {
+                entityTypes[node.type] = (entityTypes[node.type] || 0) + 1;
+            });
+            
+            let typeStats = '';
+            for (const [type, count] of Object.entries(entityTypes)) {
+                typeStats += `<p>${type}: ${count}</p>`;
+            }
+            
+            document.getElementById('stats').innerHTML = `
+                <p><strong>Total Entities:</strong> ${graphData.nodes.length}</p>
+                <p><strong>Total Relationships:</strong> ${graphData.links.length}</p>
+                <hr>
+                ${typeStats}
+            `;
+        }
+        
+        // Handle window resize
+        window.addEventListener('resize', () => {
+            if (simulation) {
+                const width = document.getElementById('graph').clientWidth;
+                const height = document.getElementById('graph').clientHeight;
+                simulation.force("center", d3.forceCenter(width / 2, height / 2));
+                simulation.alpha(0.3).restart();
+            }
+        });
+    </script>
+</body>
+</html>
