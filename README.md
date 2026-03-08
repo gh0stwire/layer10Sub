@@ -1,6 +1,10 @@
 # Enron Memory Graph: Layer10 Implementation
 
-
+# Usage
+python run_pipeline.py --csv data/raw/mails.csv --api-key (model is gemini 2.5 flash right now, so corresponding api key) --sample (N, the number of emails to process) 
+// This is to make the json files. Then visualized using flask.
+python app.py 
+// this is for the visualization. will run flas on port 5000 of 127.0.0.1
 
 # Enron Memory Graph
 
